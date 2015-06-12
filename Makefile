@@ -55,8 +55,8 @@ TIVAWARE_LIB = $(rootdir)/../tivaware
 
 #Create symbolic links to startup and linker
 HACK:=$(shell mkdir -p gcc)
-HACK:=$(shell ln -sf $(TIVAWARE_LIB)/examples/boards/ek-tm4c123gxl/hello/hello.ld gcc/$(PROJ_NAME).ld)
-HACK:=$(shell ln -sf $(TIVAWARE_LIB)/examples/boards/ek-tm4c123gxl/hello/startup_gcc.c gcc/.)
+HACK:=$(shell ln -sf $(rootdir)/main.ld gcc/$(PROJ_NAME).ld)
+HACK:=$(shell ln -sf $(rootdir)/startup_gcc.c gcc/.)
 
 include $(TIVAWARE_LIB)/makedefs
 

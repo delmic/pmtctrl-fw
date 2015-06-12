@@ -102,6 +102,7 @@ volatile uint32_t g_ui32SysTickCount = 0;
 
 volatile uint32_t g_ui32Flags = 0;
 char *g_pcStatus;
+
 // Global flag indicating that a USB configuration has been set.
 static volatile bool g_bUSBConfigured = false;
 
