@@ -286,7 +286,7 @@ main(void)
 
     // Configure GPIO
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOE);
-    // pin 0 - PROT, pin 1 - PWR, pin 3 - RELAY
+    // pin 0 - PROT, pin 1 - PWR, pin 2 - RELAY
     GPIOPinTypeGPIOOutput(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2);
     // pin 2 - Comparator result
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOC);
@@ -408,8 +408,8 @@ main(void)
 	        else{
 	            relay = value;
 		    USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "\n", 1);
-		    gpout = (relay<<3) | (pwr<<1) | prot;	
-		    GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_3, gpout);
+		    gpout = (relay<<2) | (pwr<<1) | prot;	
+		    GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, gpout);
 		}
 	    }
 	    else if (strcmp(stringRecv,"VOLT") == 0){
