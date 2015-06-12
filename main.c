@@ -206,13 +206,11 @@ void SPIsendInt(uint32_t num){
     }
 }
 
-float GetElapsedTime(){
-    time_t rawtime; 
-    float secdec, cur_time;
+float GetElapsedTime(){ 
+    float cur_time;
 
-    rawtime = HibernateRTCGet();         // read current RTC counter in seconds
-    secdec = HibernateRTCSSGet() / 32768.0;  // sub-second accuracy
-    cur_time = rawtime + secdec;
+    cur_time = g_ui32SysTickCount/(float)SYSTICKS_PER_SECOND;
+
     return cur_time;
 }
 
@@ -271,9 +269,9 @@ main(void)
     ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
 
     // Enable the system tick.
-    ROM_SysTickPeriodSet(ROM_SysCtlClockGet() / SYSTICKS_PER_SECOND);
-    ROM_SysTickIntEnable();
-    ROM_SysTickEnable();
+    SysTickPeriodSet(SysCtlClockGet() / SYSTICKS_PER_SECOND);
+    SysTickIntEnable();
+    SysTickEnable();
 
     // Initialize the transmit and receive buffers.
     USBBufferInit(&g_sTxBuffer);
@@ -311,19 +309,11 @@ main(void)
     {
     }
 
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_HIBERNATE);
-    HibernateEnableExpClk(SysCtlClockGet());
-    SysCtlDelay(10);
-    HibernateClockConfig(HIBERNATE_OSC_LOWDRIVE);
-    HibernateRTCSet(0);
-    HibernateRTCEnable(); 
-
     //
     // Main application loop.
     //
     while(1)
     {
-
         if(g_ui32Flags & COMMAND_STATUS_UPDATE)
         {
             // Clear the command flag
