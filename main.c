@@ -50,6 +50,7 @@
 #include "inc/hw_types.h"
 #include "inc/hw_gpio.h"
 #include "inc/hw_sysctl.h"
+#include "inc/hw_ssi.h"
 #include "driverlib/debug.h"
 #include "driverlib/fpu.h"
 #include "driverlib/gpio.h"
@@ -84,9 +85,9 @@
 //12bit DAC range, 2^12 
 #define DAC_RANGE 4095
 //Mask for DAC A command
-#define DAC_A 3145728
+#define DAC_A 0x00300000
 //Mask for DAC B command
-#define DAC_B 3211264
+#define DAC_B 0x00310000
 
 // The system tick rate expressed both as ticks per second and a millisecond
 // period.
@@ -119,6 +120,24 @@ SysTickIntHandler(void)
 {
     // Update our system time.
     g_ui32SysTickCount++;
+}
+
+void
+SSIDataSend24(uint32_t ui32Base, uint32_t ui32Data)
+{
+  //
+  // Wait until there is space
+  // 
+  while(!(HWREG(ui32Base + SSI_O_SR) & SSI_SR_TNF))
+    {
+    }
+
+    //
+    // Write the data to the SSI.
+    //
+    HWREG(ui32Base + SSI_O_DR) = (ui32Data & 0x00FFF000)>>12;
+    HWREG(ui32Base + SSI_O_DR) = (ui32Data & 0x00000FFF);
+    SysCtlDelay(650); // allow delay to permit transmission and SSIFSS to rise up
 }
 
 uint32_t
@@ -199,7 +218,7 @@ RxHandler(void *pvCBData, uint32_t ui32Event, uint32_t ui32MsgValue,
 }
 
 void SPIsendInt(uint32_t num){
-    SSIDataPut(SSI0_BASE, num);
+    SSIDataSend24(SSI0_BASE, num);
     // Wait until done transferring
     while(SSIBusy(SSI0_BASE))
     {
@@ -209,7 +228,8 @@ void SPIsendInt(uint32_t num){
 float GetElapsedTime(){ 
     float cur_time;
 
-    cur_time = g_ui32SysTickCount/(float)SYSTICKS_PER_SECOND;
+    //Due to 80MHz
+    cur_time = g_ui32SysTickCount/125.0;
 
     return cur_time;
 }
@@ -249,9 +269,9 @@ main(void)
     // extra stack usage.
     ROM_FPULazyStackingEnable();
 
-    // Set the clocking to run from the PLL at 50MHz
-    SysCtlClockSet(SYSCTL_SYSDIV_1 | SYSCTL_USE_OSC | SYSCTL_OSC_MAIN |
-                   SYSCTL_XTAL_16MHZ);
+    // Set the clocking to run from the PLL at 80MHz
+    SysCtlClockSet(SYSCTL_SYSDIV_2_5 | SYSCTL_USE_PLL | SYSCTL_XTAL_16MHZ | SYSCTL_OSC_MAIN);
+    //SysCtlClockSet(SYSCTL_SYSDIV_4 | SYSCTL_USE_PLL | SYSCTL_XTAL_16MHZ | SYSCTL_OSC_MAIN); //50 MHz
 
     // Configure the required pins for USB operation.
     ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
@@ -301,14 +321,18 @@ main(void)
     GPIOPinTypeSSI(GPIO_PORTA_BASE, GPIO_PIN_5 | GPIO_PIN_4 | GPIO_PIN_3 |
                    GPIO_PIN_2);
     // 12-bit DAC
-    SSIConfigSetExpClk(SSI0_BASE, SysCtlClockGet(), SSI_FRF_MOTO_MODE_0,
-                       SSI_MODE_MASTER, 1000000, 8);
+    SSIConfigSetExpClk(SSI0_BASE, 80000000, SSI_FRF_MOTO_MODE_3,
+                       SSI_MODE_MASTER, 6400000, 12);
+    //SSIConfigSetExpClk(SSI0_BASE, 50000000, SSI_FRF_MOTO_MODE_0,
+    //                   SSI_MODE_MASTER, 6400000, 8);
     SSIEnable(SSI0_BASE);
     // Get rid of residual data from the SSI port
     while(SSIDataGetNonBlocking(SSI0_BASE, &pui32DataRx))
     {
     }
 
+    pui32DataTx = 0x006F0000;
+    SPIsendInt(pui32DataTx);
     //
     // Main application loop.
     //
@@ -327,8 +351,8 @@ main(void)
 	    // In the meantime, check for protection trip
 	    gpin = GPIOPinRead(GPIO_PORTC_BASE, GPIO_PIN_7);
 	    // Mask to read the comparator returned bit
-            trip_bit = gpin & 0x04;
-	    if (trip_bit == 4){
+            trip_bit = gpin & 0x80;
+	    if (trip_bit == 128){
 	    	if (begin == 0){
 	     	    begin = GetElapsedTime();
 	    	}
@@ -419,8 +443,10 @@ main(void)
 	            volt = value;
 		    dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
 		    //Prepare command for DAC
-		    pui32DataTx = (dac_data<<4) | DAC_A;
+		    pui32DataTx = (dac_data<<4) | DAC_B;
 		    SPIsendInt(pui32DataTx);
+    		    pui32DataTx = 0x006F0000;
+    		    SPIsendInt(pui32DataTx);
 		    USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "\n", 1);
 		}
             }
@@ -431,8 +457,10 @@ main(void)
 	            pcurr = value;
 		    dac_data = (pcurr / (MAX_PCURR - MIN_PCURR)) * DAC_RANGE;
 		    //Prepare command for DAC
-                    pui32DataTx = (dac_data<<4) | DAC_B;
+                    pui32DataTx = (dac_data<<4) | DAC_A;
 		    SPIsendInt(pui32DataTx);
+    		    pui32DataTx = 0x006F0000;
+    		    SPIsendInt(pui32DataTx);
 		    USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "\n", 1);
 		}
             }
