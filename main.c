@@ -254,7 +254,7 @@ main(void)
     //Dummy values for initialization
     char* idn = IDN; 
     int pwr = 0;
-    int prot = 0;
+    int prot = 1;
     int relay = 0;
     float volt = 0, tvolt;
     float pcurr = 50, tpcurr;
@@ -361,7 +361,7 @@ main(void)
 	    	    time_spent = (double)(end - begin);
 		    if (time_spent > ptime){
 			//Force protection to active
-	                prot = 1;
+	                prot = 0;
 		        // Set pwr and prot pin values
 		        gpout = (pwr<<1) | prot;	
 		        GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
