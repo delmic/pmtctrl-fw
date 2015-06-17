@@ -254,7 +254,7 @@ main(void)
     //Dummy values for initialization
     char* idn = IDN; 
     int pwr = 0;
-    int prot = 1;
+    int swt = 1;
     int relay = 0;
     float volt = 0, tvolt;
     float pcurr = 50, tpcurr;
@@ -306,7 +306,7 @@ main(void)
 
     // Configure GPIO
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOE);
-    // pin 0 - PROT, pin 1 - PWR, pin 2 - RELAY
+    // pin 0 - SWITCH, pin 1 - PWR, pin 2 - RELAY
     GPIOPinTypeGPIOOutput(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2);
     // pin 2 - Comparator result
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOC);
@@ -361,9 +361,9 @@ main(void)
 	    	    time_spent = (double)(end - begin);
 		    if (time_spent > ptime){
 			//Force protection to active
-	                prot = 0;
-		        // Set pwr and prot pin values
-		        gpout = (pwr<<1) | prot;	
+	                swt = 0;
+		        // Set pwr and swt pin values
+		        gpout = (pwr<<1) | swt;	
 		        GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
 		    }
 		}
@@ -410,19 +410,19 @@ main(void)
 	        else{
 	            pwr = value;
 		    USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "\n", 1);
-		    // Set pwr and prot pin values
-		    gpout = (pwr<<1) | prot;	
+		    // Set pwr and swt pin values
+		    gpout = (pwr<<1) | swt;	
 		    GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
 		}
 	    }
-	    else if (strcmp(stringRecv,"PROT") == 0){
+	    else if (strcmp(stringRecv,"SWITCH") == 0){
 	        if ((value != 0) && (value != 1))
 		    USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "ERROR: Out of range set value\n", 30);
 	        else{
-	            prot = value;
+	            swt = value;
 		    USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "\n", 1);
-		    // Set pwr and prot pin values
-		    gpout = (pwr<<1) | prot;	
+		    // Set pwr and swt pin values
+		    gpout = (pwr<<1) | swt;	
 		    GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
 		}
 	    }
@@ -432,7 +432,7 @@ main(void)
 	        else{
 	            relay = value;
 		    USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "\n", 1);
-		    gpout = (relay<<2) | (pwr<<1) | prot;	
+		    gpout = (relay<<2) | (pwr<<1) | swt;	
 		    GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, gpout);
 		}
 	    }
@@ -520,9 +520,9 @@ main(void)
 		USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, buffer, c);
 		USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "\n", 1);
 	    }
-	    else if (strcmp(stringRecv,"PROT?") == 0){
+	    else if (strcmp(stringRecv,"SWITCH?") == 0){
 		//int to string
-            	usnprintf(buffer, 7, "%d", prot);
+            	usnprintf(buffer, 7, "%d", swt);
 		for(c=0; buffer[c]!='\0'; ++c);
 		USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, buffer, c);
 		USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "\n", 1);
