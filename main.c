@@ -49,11 +49,15 @@
 #include "inc/hw_memmap.h"
 #include "inc/hw_types.h"
 #include "inc/hw_gpio.h"
+#include "inc/hw_comp.h"
 #include "inc/hw_sysctl.h"
 #include "inc/hw_ssi.h"
+#include "inc/hw_nvic.h"
+#include "inc/tm4c123gh6pm.h"
 #include "driverlib/debug.h"
 #include "driverlib/fpu.h"
 #include "driverlib/gpio.h"
+#include "driverlib/comp.h"
 #include "driverlib/pin_map.h"
 #include "driverlib/interrupt.h"
 #include "driverlib/sysctl.h"
@@ -125,16 +129,12 @@ SysTickIntHandler(void)
 void
 SSIDataSend24(uint32_t ui32Base, uint32_t ui32Data)
 {
-  //
   // Wait until there is space
-  // 
   while(!(HWREG(ui32Base + SSI_O_SR) & SSI_SR_TNF))
     {
     }
 
-    //
     // Write the data to the SSI.
-    //
     HWREG(ui32Base + SSI_O_DR) = (ui32Data & 0x00FFF000)>>12;
     HWREG(ui32Base + SSI_O_DR) = (ui32Data & 0x00000FFF);
     SysCtlDelay(650); // allow delay to permit transmission and SSIFSS to rise up
@@ -277,6 +277,7 @@ main(void)
     ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
     ROM_GPIOPinTypeUSBAnalog(GPIO_PORTD_BASE, GPIO_PIN_5 | GPIO_PIN_4);
 
+    // Only for debugging purposes, using the development board 
     // Enable the GPIO port that is used for the on-board LED.
     //ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
 
@@ -308,9 +309,16 @@ main(void)
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOE);
     // pin 0 - SWITCH, pin 1 - PWR, pin 2 - RELAY
     GPIOPinTypeGPIOOutput(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2);
-    // pin 2 - Comparator result
+    
+    // Configure Analog Comparator
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOC);
-    GPIOPinTypeGPIOInput(GPIO_PORTC_BASE, GPIO_PIN_7);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_COMP0);
+    // pin 6 - Comparator reference, pin 7 - Comparator input
+    GPIOPinTypeComparator(GPIO_PORTC_BASE,GPIO_PIN_6|GPIO_PIN_7);
+    GPIOPinConfigure(GPIO_PF0_C0O);
+    ComparatorConfigure(COMP_BASE,0,
+        COMP_TRIG_NONE|COMP_INT_RISE|COMP_ASRCP_PIN0|COMP_OUTPUT_NORMAL);
 
     // Configure SPI
     SysCtlPeripheralEnable(SYSCTL_PERIPH_SSI0);
@@ -349,10 +357,8 @@ main(void)
         do
         {
 	    // In the meantime, check for protection trip
-	    gpin = GPIOPinRead(GPIO_PORTC_BASE, GPIO_PIN_7);
-	    // Mask to read the comparator returned bit
-            trip_bit = gpin & 0x80;
-	    if (trip_bit == 128){
+            trip_bit = ComparatorValueGet(COMP_BASE,0);
+	    if (trip_bit == 0){
 	    	if (begin == 0){
 	     	    begin = GetElapsedTime();
 	    	}
@@ -455,7 +461,11 @@ main(void)
 		    USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "ERROR: Out of range set value\n", 30);
 	        else{
 	            pcurr = value;
-		    dac_data = (pcurr / (MAX_PCURR - MIN_PCURR)) * DAC_RANGE;
+		    //We assume there is a divisor to half in the PMT output voltage,
+		    //the max of comparison voltage is 4.095 V, the PMT has a multiplication
+		    //of 60000, so 100microAmps should be compared to 100e-6*60000/2=3V therefore
+		    //we need a correction factor of 3/4.095=~0.75
+		    dac_data = (0.75*pcurr / (MAX_PCURR - MIN_PCURR)) * DAC_RANGE;
 		    //Prepare command for DAC
                     pui32DataTx = (dac_data<<4) | DAC_A;
 		    SPIsendInt(pui32DataTx);
@@ -539,7 +549,51 @@ main(void)
 	    }	
 	}
 	else {
-    	    USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "ERROR: Cannot parse this command\n", 33);
+	    token = strtok(stringRecv, " \n\r");
+	    if (strcmp(stringRecv,"UPDATE") == 0){
+	  	USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "About to perform firmware update...\n", 36);
+		// Delaying before entering DFU mode.  You can trigger it with a button
+		// press.			
+		SysCtlDelay(200000000);
+	
+		// Terminate the USB device and detach from the bus.
+		USBDCDTerm(0);
+
+		// Disable all interrupts.
+		ROM_IntMasterDisable();
+
+		// Disable SysTick and its interrupt.
+		ROM_SysTickIntDisable();
+		ROM_SysTickDisable();
+
+		// Disable all processor interrupts.  Instead of disabling them one at a
+		// time, a direct write to NVIC is done to disable all peripheral
+		// interrupts.
+		HWREG(NVIC_DIS0) = 0xffffffff;
+		HWREG(NVIC_DIS1) = 0xffffffff;
+
+		// Enable and reset the USB peripheral.
+		ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_USB0);
+		ROM_SysCtlPeripheralReset(SYSCTL_PERIPH_USB0);
+		ROM_SysCtlUSBPLLEnable();
+
+		// Wait for about a second.
+		ROM_SysCtlDelay(80000000 / 3);
+
+		// Re-enable interrupts at the NVIC level.
+		ROM_IntMasterEnable();
+
+		// Call the USB boot loader.
+		ROM_UpdateUSB(0);
+
+		// Should never get here, but just in case.
+		while(1)
+		{
+		}		
+	    }
+	    else {
+    	    	USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, "ERROR: Cannot parse this command\n", 33);
+	    }
 	}
 
 	i=0;
