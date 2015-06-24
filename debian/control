@@ -1,0 +1,15 @@
+Source: pmtctrl-fw
+Section: firmware
+Priority: optional
+Maintainer: Kimon Tsitsikas <tsitsikas@delmic.com>
+Build-Depends: debhelper (>= 9)
+Standards-Version: 3.9.2
+Homepage: http://www.delmic.com
+
+Package: pmtctrl-fw
+Architecture: any
+Depends: ${shlibs:Depends}, 
+         ${misc:Depends}
+Description: PMT Control Unit firmware
+ Firmware for the PMT Control Unit. Provides the interface to control
+ the board and triggers the protection in case of excessive intensity.
