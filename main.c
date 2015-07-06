@@ -387,6 +387,9 @@ main(void)
 			}
 		}
 		while((cThisChar != '\n') || (i == 0));
+		
+		//Turn to uppercase
+		strupr(stringRecv);
 
 		//Check if it's a setter
 		s_length = strlen(stringRecv);
