@@ -251,11 +251,11 @@ main(void)
 	int s_length;
 	double time_spent;
 	double begin = 0, end;
-	//Dummy values for initialization
+	//Values for initialization
 	char* idn = IDN;
 	int pwr = 0;
-	int swt = 1;
-	int relay = 0;
+	int swt = 0;
+	int relay = 1;
 	float volt = 0, tvolt;
 	float pcurr = 50, tpcurr;
 	float ptime = 0.001, tptime;
@@ -341,6 +341,24 @@ main(void)
 
 	pui32DataTx = 0x006F0000;
 	SPIsendInt(pui32DataTx);
+
+	// Set initialization values to output pins
+	// Set relay, pwr and swt pin values
+	gpout = (relay<<2) | (pwr<<1) | swt;	
+	GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, gpout);
+	// Set voltage
+	dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
+	pui32DataTx = (dac_data<<4) | DAC_B;
+	SPIsendInt(pui32DataTx);
+	pui32DataTx = 0x006F0000;
+	SPIsendInt(pui32DataTx);
+	// Set protection current
+	dac_data = (0.75*pcurr / (MAX_PCURR - MIN_PCURR)) * DAC_RANGE;
+	pui32DataTx = (dac_data<<4) | DAC_A;
+	SPIsendInt(pui32DataTx);
+	pui32DataTx = 0x006F0000;
+	SPIsendInt(pui32DataTx);
+
 	//
 	// Main application loop.
 	//
