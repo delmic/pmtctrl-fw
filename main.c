@@ -73,6 +73,8 @@
 #include "usblib/device/usbdcdc.h"
 #include "utils/ustdlib.h"
 #include "usb_serial_structs.h"
+#include "driverlib/uart.h"
+#include "utils/uartstdio.h"
 
 
 //Min and Max voltage values in V
@@ -234,6 +236,13 @@ float GetElapsedTime(){
 	return cur_time;
 }
 
+void UARTsendString(char *pt){
+	while(*pt!='\0'){
+		UARTCharPut(UART0_BASE, *pt);
+		pt++;
+	}
+}
+
 int
 main(void)
 {
@@ -272,6 +281,16 @@ main(void)
 	// Set the clocking to run from the PLL at 80MHz
 	SysCtlClockSet(SYSCTL_SYSDIV_2_5 | SYSCTL_USE_PLL | SYSCTL_XTAL_16MHZ | SYSCTL_OSC_MAIN);
 	//SysCtlClockSet(SYSCTL_SYSDIV_4 | SYSCTL_USE_PLL | SYSCTL_XTAL_16MHZ |	SYSCTL_OSC_MAIN); //50 MHz
+
+	// Configure UART
+	SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+	GPIOPinConfigure(GPIO_PA0_U0RX);
+	GPIOPinConfigure(GPIO_PA1_U0TX);
+	GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+	UARTConfigSetExpClk(UART0_BASE, 80000000, 9600,
+				(UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | 
+				UART_CONFIG_PAR_NONE));
 
 	// Configure the required pins for USB operation.
 	ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
@@ -396,12 +415,19 @@ main(void)
 				begin = 0;
 			}
 
+			//Read either from USB or UART
 			ui32Read = USBBufferRead((tUSBBuffer *)&g_sRxBuffer, &ui8Char, 1);
 			if(ui32Read)
 			{
 				cThisChar = (char)ui8Char;
 				stringRecv[i] = cThisChar;
 				i++;
+			}
+			else if(UARTCharsAvail(UART0_BASE))
+			{
+				cThisChar = UARTCharGetNonBlocking(UART0_BASE);
+				stringRecv[i] = cThisChar;
+				i++;   
 			}
 		}
 		while((cThisChar != '\n') || (i == 0));
@@ -424,7 +450,10 @@ main(void)
 		//Protocol implementation for PMT ctrl unit command processing
 		//
 		if (((wspaces > 0) && (qmarks > 0)) || (wspaces > 1) || (qmarks > 1)){
-			USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
+			if (strcmp(g_pcStatus, "Connected") == 0)
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
+			else
+				UARTsendString("ERROR: Cannot parse this command\n");
 		}
 		else if (wspaces){
 			// split data to get the value in case of setter
@@ -433,10 +462,16 @@ main(void)
 			value = ustrtof(token, NULL);
 			if (strcmp(stringRecv,"PWR") == 0){
 				if ((value != 0) && (value != 1))
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					else
+						UARTsendString("ERROR: Out of range set value\n");
 				else{
 					pwr = value;
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					else
+						UARTCharPut(UART0_BASE, '\n');
 					// Set pwr and swt pin values
 					gpout = (pwr<<1) | swt;	
 					GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
@@ -444,10 +479,16 @@ main(void)
 			}
 			else if (strcmp(stringRecv,"SWITCH") == 0){
 				if ((value != 0) && (value != 1))
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					else
+						UARTsendString("ERROR: Out of range set value\n");
 				else{
 					swt = value;
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					else
+						UARTCharPut(UART0_BASE, '\n');
 					// Set pwr and swt pin values
 					gpout = (pwr<<1) | swt;	
 					GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
@@ -455,17 +496,26 @@ main(void)
 			}
 			else if (strcmp(stringRecv,"RELAY") == 0){
 				if ((value != 0) && (value != 1))
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					else
+						UARTsendString("ERROR: Out of range set value\n");
 				else{
 					relay = value;
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					else
+						UARTCharPut(UART0_BASE, '\n');
 					gpout = (relay<<2) | (pwr<<1) | swt;	
 					GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, gpout);
 				}
 			}
 			else if (strcmp(stringRecv,"VOLT") == 0){
 				if ((value < MIN_VOLT) || (value > MAX_VOLT))
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					else
+						UARTsendString("ERROR: Out of range set value\n");
 				else{
 					volt = value;
 					dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
@@ -474,12 +524,18 @@ main(void)
 					SPIsendInt(pui32DataTx);
 					pui32DataTx = 0x006F0000;
 					SPIsendInt(pui32DataTx);
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					else
+						UARTCharPut(UART0_BASE, '\n');
 				}
 			}
 			else if (strcmp(stringRecv,"PCURR") == 0){
 				if ((value < MIN_PCURR) || (value > MAX_PCURR))
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					else
+						UARTsendString("ERROR: Out of range set value\n");
 				else{
 					pcurr = value;
 					//We assume there is a divisor to half in the PMT output voltage,
@@ -492,34 +548,58 @@ main(void)
 					SPIsendInt(pui32DataTx);
 					pui32DataTx = 0x006F0000;
 					SPIsendInt(pui32DataTx);
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					else
+						UARTCharPut(UART0_BASE, '\n');
 				}
 			}
 			else if (strcmp(stringRecv,"PTIME") == 0){
 				if ((value < MIN_PTIME) || (value > MAX_PTIME))
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+					else
+						UARTsendString("ERROR: Out of range set value\n");
 				else{
 					ptime = value;
-					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					if (strcmp(g_pcStatus, "Connected") == 0)
+						USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+					else
+						UARTCharPut(UART0_BASE, '\n');
 				}
 			}
 			else{
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
+				if (strcmp(g_pcStatus, "Connected") == 0)
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
+				else
+					UARTsendString("ERROR: Cannot parse this command\n");
 			}
 		}
 		else if (qmarks){
 			token = strtok(stringRecv, " \n\r");
 			if (strcmp(stringRecv,"*IDN?") == 0){
-				for(c=0; idn[c]!='\0'; ++c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) idn, c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				if (strcmp(g_pcStatus, "Connected") == 0){
+					for(c=0; idn[c]!='\0'; ++c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) idn, c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				}
+				else{
+					UARTsendString(idn);
+					UARTCharPut(UART0_BASE, '\n');
+				}
 			}
 			else if (strcmp(stringRecv,"PWR?") == 0){
 				//int to string
 				usnprintf(buffer, 7, "%d", pwr);
-				for(c=0; buffer[c]!='\0'; ++c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				if (strcmp(g_pcStatus, "Connected") == 0){
+					for(c=0; buffer[c]!='\0'; ++c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				}
+				else{
+					UARTsendString(buffer);
+					UARTCharPut(UART0_BASE, '\n');
+				}
 			}
 			else if (strcmp(stringRecv,"VOLT?") == 0){
 				//float to string
@@ -527,9 +607,15 @@ main(void)
 				lvalue = (long)tvolt;
 				tvolt -= lvalue;
 				usnprintf(buffer, 15, "%d.%06d", lvalue, (long)(tvolt * 1000000));
-				for(c=0; buffer[c]!='\0'; ++c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				if (strcmp(g_pcStatus, "Connected") == 0){
+					for(c=0; buffer[c]!='\0'; ++c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				}
+				else{
+					UARTsendString(buffer);
+					UARTCharPut(UART0_BASE, '\n');
+				}
 			}
 			else if (strcmp(stringRecv,"PCURR?") == 0){
 				//float to string
@@ -537,9 +623,15 @@ main(void)
 				lvalue = (long)tpcurr;
 				tpcurr -= lvalue;
 				usnprintf(buffer, 15, "%d.%06d", lvalue, (long)(tpcurr * 1000000));
-				for(c=0; buffer[c]!='\0'; ++c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				if (strcmp(g_pcStatus, "Connected") == 0){
+					for(c=0; buffer[c]!='\0'; ++c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				}
+				else{
+					UARTsendString(buffer);
+					UARTCharPut(UART0_BASE, '\n');
+				}
 			}
 			else if (strcmp(stringRecv,"PTIME?") == 0){
 				//float to string
@@ -547,26 +639,47 @@ main(void)
 				lvalue = (long)tptime;
 				tptime -= lvalue;
 				usnprintf(buffer, 15, "%d.%06d", lvalue, (long)(tptime * 1000000));
-				for(c=0; buffer[c]!='\0'; ++c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				if (strcmp(g_pcStatus, "Connected") == 0){
+					for(c=0; buffer[c]!='\0'; ++c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				}
+				else{
+					UARTsendString(buffer);
+					UARTCharPut(UART0_BASE, '\n');
+				}
 			}
 			else if (strcmp(stringRecv,"SWITCH?") == 0){
 				//int to string
 				usnprintf(buffer, 7, "%d", swt);
-				for(c=0; buffer[c]!='\0'; ++c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				if (strcmp(g_pcStatus, "Connected") == 0){
+					for(c=0; buffer[c]!='\0'; ++c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				}
+				else{
+					UARTsendString(buffer);
+					UARTCharPut(UART0_BASE, '\n');
+				}
 			}
 			else if (strcmp(stringRecv,"RELAY?") == 0){
 				//int to string
 				usnprintf(buffer, 7, "%d", relay);
-				for(c=0; buffer[c]!='\0'; ++c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				if (strcmp(g_pcStatus, "Connected") == 0){
+					for(c=0; buffer[c]!='\0'; ++c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
+				}
+				else{
+					UARTsendString(buffer);
+					UARTCharPut(UART0_BASE, '\n');
+				}
 			}
 			else{
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
+				if (strcmp(g_pcStatus, "Connected") == 0)
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
+				else
+					UARTsendString("ERROR: Cannot parse this command\n");
 			}
 		}
 		else{
@@ -613,7 +726,10 @@ main(void)
 				}
 			}
 			else {
-				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
+				if (strcmp(g_pcStatus, "Connected") == 0)
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
+				else
+					UARTsendString("ERROR: Cannot parse this command\n");
 			}
 		}
 

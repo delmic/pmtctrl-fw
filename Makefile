@@ -69,6 +69,7 @@ gcc/$(PROJ_NAME).axf: gcc/$(PROJ_NAME).o
 gcc/$(PROJ_NAME).axf: gcc/startup_gcc.o
 gcc/$(PROJ_NAME).axf: gcc/ustdlib.o
 gcc/$(PROJ_NAME).axf: gcc/usb_serial_structs.o
+gcc/$(PROJ_NAME).axf: gcc/uartstdio.o
 gcc/$(PROJ_NAME).axf: $(TIVAWARE_LIB)/usblib/gcc/libusb.a
 gcc/$(PROJ_NAME).axf: $(TIVAWARE_LIB)/driverlib/gcc/libdriver.a
 gcc/$(PROJ_NAME).axf: gcc/$(PROJ_NAME).ld
