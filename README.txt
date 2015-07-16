@@ -51,6 +51,8 @@ directory, in our case we also place it in the development directory.
 	
 	cd ~/development/pmtctrl-fw
 	make
+	// In case we use the USB chip
+	// make CHIP=usb
 
 10. Run this to flash over USB. Remember to run with sudo.
 

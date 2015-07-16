@@ -64,10 +64,15 @@
 #include "driverlib/systick.h"
 #include "driverlib/ssi.h"
 #include "driverlib/timer.h"
+#include "driverlib/usb.h"
 #include "driverlib/rom.h"
+#include "usblib/usblib.h"
+#include "usblib/usbcdc.h"
+#include "usblib/usb-ids.h"
+#include "usblib/device/usbdevice.h"
+#include "usblib/device/usbdcdc.h"
 #include "utils/ustdlib.h"
-#include "driverlib/uart.h"
-#include "utils/uartstdio.h"
+#include "usb_serial_structs.h"
 
 
 //Min and Max voltage values in V
@@ -96,6 +101,23 @@
 // Global system tick counter
 volatile uint32_t g_ui32SysTickCount = 0;
 
+// Flags used to pass commands from interrupt context to the main loop.
+#define COMMAND_PACKET_RECEIVED 0x00000001
+#define COMMAND_STATUS_UPDATE   0x00000002
+
+volatile uint32_t g_ui32Flags = 0;
+char *g_pcStatus;
+
+// Global flag indicating that a USB configuration has been set.
+static volatile bool g_bUSBConfigured = false;
+
+void
+__error__(char *pcFilename, uint32_t ui32Line)
+{
+	while(1)
+	{
+	}
+}
 
 void
 SysTickIntHandler(void)
@@ -118,6 +140,83 @@ SSIDataSend24(uint32_t ui32Base, uint32_t ui32Data)
 	SysCtlDelay(650); // allow delay to permit transmission and SSIFSS to rise up
 }
 
+uint32_t
+ControlHandler(void *pvCBData, uint32_t ui32Event,
+		uint32_t ui32MsgValue, void *pvMsgData)
+{
+	uint32_t ui32IntsOff;
+
+	switch(ui32Event)
+	{
+
+		// We are connected to a host and communication is now possible.
+		case USB_EVENT_CONNECTED:
+			g_bUSBConfigured = true;
+
+			// Flush our buffers.
+			USBBufferFlush(&g_sTxBuffer);
+			USBBufferFlush(&g_sRxBuffer);
+
+			// Tell the main loop to update the display.
+			ui32IntsOff = ROM_IntMasterDisable();
+			g_pcStatus = "Connected";
+			g_ui32Flags |= COMMAND_STATUS_UPDATE;
+			if(!ui32IntsOff)
+			{
+				ROM_IntMasterEnable();
+			}
+			break;
+
+		// The host has disconnected.
+		case USB_EVENT_DISCONNECTED:
+			g_bUSBConfigured = false;
+			ui32IntsOff = ROM_IntMasterDisable();
+			g_pcStatus = "Disconnected";
+			g_ui32Flags |= COMMAND_STATUS_UPDATE;
+			if(!ui32IntsOff)
+			{
+				ROM_IntMasterEnable();
+			}
+			break;
+
+		// Ignore SUSPEND and RESUME for now.
+		case USB_EVENT_SUSPEND:
+		case USB_EVENT_RESUME:
+			break;
+
+		// We don't expect to receive any other events.  Ignore any that show
+		// up in a release build or hang in a debug build.
+		default:
+			break;
+	}
+
+	return(0);
+}
+
+//Callbacks are kept for later use
+uint32_t
+TxHandler(void *pvCBData, uint32_t ui32Event, uint32_t ui32MsgValue,
+	void *pvMsgData)
+{
+	switch(ui32Event)
+	{
+		case USB_EVENT_TX_COMPLETE:
+			// Since we are using the USBBuffer, we don't need to do anything
+			// here.
+			break;
+		default:
+			break;
+	}
+	return(0);
+}
+
+uint32_t
+RxHandler(void *pvCBData, uint32_t ui32Event, uint32_t ui32MsgValue,
+	void *pvMsgData)
+{
+	return(0);
+}
+
 void SPIsendInt(uint32_t num){
 	SSIDataSend24(SSI0_BASE, num);
 	// Wait until done transferring
@@ -135,22 +234,17 @@ float GetElapsedTime(){
 	return cur_time;
 }
 
-void UARTsendString(char *pt){
-	while(*pt!='\0'){
-		UARTCharPut(UART0_BASE, *pt);
-		pt++;
-	}
-}
-
 int
 main(void)
 {
 	char stringRecv[32]; //32 bytes will be reserved for this array
 	char buffer[32]; //32 bytes will be reserved for this array
+	uint32_t ui32Read;
+	uint8_t ui8Char;
 	char* token;
 	float value;
 	char cThisChar = ' ';
-	int i=0,j=0;
+	int i=0,j=0,c=0;
 	int wspaces=0;
 	int qmarks=0;
 	long lvalue;
@@ -179,15 +273,9 @@ main(void)
 	SysCtlClockSet(SYSCTL_SYSDIV_2_5 | SYSCTL_USE_PLL | SYSCTL_XTAL_16MHZ | SYSCTL_OSC_MAIN);
 	//SysCtlClockSet(SYSCTL_SYSDIV_4 | SYSCTL_USE_PLL | SYSCTL_XTAL_16MHZ |	SYSCTL_OSC_MAIN); //50 MHz
 
-	// Configure UART
-	SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
-	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
-	GPIOPinConfigure(GPIO_PA0_U0RX);
-	GPIOPinConfigure(GPIO_PA1_U0TX);
-	GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
-	UARTConfigSetExpClk(UART0_BASE, 80000000, 9600,
-				(UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | 
-				UART_CONFIG_PAR_NONE));
+	// Configure the required pins for USB operation.
+	ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
+	ROM_GPIOPinTypeUSBAnalog(GPIO_PORTD_BASE, GPIO_PIN_5 | GPIO_PIN_4);
 
 	// Only for debugging purposes, using the development board
 	// Enable the GPIO port that is used for the on-board LED.
@@ -196,12 +284,26 @@ main(void)
 	// Enable the GPIO pins for the LED (PF2 & PF3).
 	//ROM_GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, GPIO_PIN_3|GPIO_PIN_2|GPIO_PIN_1);
 
+	// Not configured initially.
+	g_bUSBConfigured = false;
+
 	ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
 
 	// Enable the system tick.
 	SysTickPeriodSet(SysCtlClockGet() / SYSTICKS_PER_SECOND);
 	SysTickIntEnable();
 	SysTickEnable();
+
+	// Initialize the transmit and receive buffers.
+	USBBufferInit(&g_sTxBuffer);
+	USBBufferInit(&g_sRxBuffer);
+
+	// Set the USB stack mode to Device mode with VBUS monitoring.
+	USBStackModeSet(0, eUSBModeForceDevice, 0);
+
+	// Pass our device information to the USB library and place the device
+	// on the bus.
+	USBDCDCInit(0, &g_sCDCDevice);
 
 	// Configure GPIO
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOE);
@@ -262,6 +364,13 @@ main(void)
 	//
 	while(1)
 	{
+		if(g_ui32Flags & COMMAND_STATUS_UPDATE)
+		{
+			// Clear the command flag
+			ROM_IntMasterDisable();
+			g_ui32Flags &= ~COMMAND_STATUS_UPDATE;
+			ROM_IntMasterEnable();
+		}
 
 		do
 		{
@@ -287,13 +396,15 @@ main(void)
 				begin = 0;
 			}
 
-			//Read from UART
-			if(UARTCharsAvail(UART0_BASE))
+			//Read from USB
+			ui32Read = USBBufferRead((tUSBBuffer *)&g_sRxBuffer, &ui8Char, 1);
+			if(ui32Read)
 			{
-				cThisChar = UARTCharGetNonBlocking(UART0_BASE);
+				cThisChar = (char)ui8Char;
 				stringRecv[i] = cThisChar;
-				i++;   
+				i++;
 			}
+
 		}
 		while((cThisChar != '\n') || (i == 0));
 		
@@ -315,7 +426,7 @@ main(void)
 		//Protocol implementation for PMT ctrl unit command processing
 		//
 		if (((wspaces > 0) && (qmarks > 0)) || (wspaces > 1) || (qmarks > 1)){
-			UARTsendString("ERROR: Cannot parse this command\n");
+			USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
 		}
 		else if (wspaces){
 			// split data to get the value in case of setter
@@ -324,10 +435,10 @@ main(void)
 			value = ustrtof(token, NULL);
 			if (strcmp(stringRecv,"PWR") == 0){
 				if ((value != 0) && (value != 1))
-					UARTsendString("ERROR: Out of range set value\n");
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
 				else{
 					pwr = value;
-					UARTCharPut(UART0_BASE, '\n');
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 					// Set pwr and swt pin values
 					gpout = (pwr<<1) | swt;	
 					GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
@@ -335,10 +446,10 @@ main(void)
 			}
 			else if (strcmp(stringRecv,"SWITCH") == 0){
 				if ((value != 0) && (value != 1))
-					UARTsendString("ERROR: Out of range set value\n");
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
 				else{
 					swt = value;
-					UARTCharPut(UART0_BASE, '\n');
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 					// Set pwr and swt pin values
 					gpout = (pwr<<1) | swt;	
 					GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
@@ -346,17 +457,17 @@ main(void)
 			}
 			else if (strcmp(stringRecv,"RELAY") == 0){
 				if ((value != 0) && (value != 1))
-					UARTsendString("ERROR: Out of range set value\n");
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
 				else{
 					relay = value;
-					UARTCharPut(UART0_BASE, '\n');
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 					gpout = (relay<<2) | (pwr<<1) | swt;	
 					GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, gpout);
 				}
 			}
 			else if (strcmp(stringRecv,"VOLT") == 0){
 				if ((value < MIN_VOLT) || (value > MAX_VOLT))
-					UARTsendString("ERROR: Out of range set value\n");
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
 				else{
 					volt = value;
 					dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
@@ -365,12 +476,12 @@ main(void)
 					SPIsendInt(pui32DataTx);
 					pui32DataTx = 0x006F0000;
 					SPIsendInt(pui32DataTx);
-					UARTCharPut(UART0_BASE, '\n');
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 				}
 			}
 			else if (strcmp(stringRecv,"PCURR") == 0){
 				if ((value < MIN_PCURR) || (value > MAX_PCURR))
-					UARTsendString("ERROR: Out of range set value\n");
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
 				else{
 					pcurr = value;
 					//We assume there is a divisor to half in the PMT output voltage,
@@ -383,32 +494,34 @@ main(void)
 					SPIsendInt(pui32DataTx);
 					pui32DataTx = 0x006F0000;
 					SPIsendInt(pui32DataTx);
-					UARTCharPut(UART0_BASE, '\n');
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 				}
 			}
 			else if (strcmp(stringRecv,"PTIME") == 0){
 				if ((value < MIN_PTIME) || (value > MAX_PTIME))
-					UARTsendString("ERROR: Out of range set value\n");
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Out of range set value\n", 30);
 				else{
 					ptime = value;
-					UARTCharPut(UART0_BASE, '\n');
+					USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 				}
 			}
 			else{
-				UARTsendString("ERROR: Cannot parse this command\n");
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
 			}
 		}
 		else if (qmarks){
 			token = strtok(stringRecv, " \n\r");
 			if (strcmp(stringRecv,"*IDN?") == 0){
-				UARTsendString(idn);
-				UARTCharPut(UART0_BASE, '\n');
+				for(c=0; idn[c]!='\0'; ++c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) idn, c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 			}
 			else if (strcmp(stringRecv,"PWR?") == 0){
 				//int to string
 				usnprintf(buffer, 7, "%d", pwr);
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				for(c=0; buffer[c]!='\0'; ++c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 			}
 			else if (strcmp(stringRecv,"VOLT?") == 0){
 				//float to string
@@ -416,8 +529,9 @@ main(void)
 				lvalue = (long)tvolt;
 				tvolt -= lvalue;
 				usnprintf(buffer, 15, "%d.%06d", lvalue, (long)(tvolt * 1000000));
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				for(c=0; buffer[c]!='\0'; ++c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 			}
 			else if (strcmp(stringRecv,"PCURR?") == 0){
 				//float to string
@@ -425,8 +539,9 @@ main(void)
 				lvalue = (long)tpcurr;
 				tpcurr -= lvalue;
 				usnprintf(buffer, 15, "%d.%06d", lvalue, (long)(tpcurr * 1000000));
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				for(c=0; buffer[c]!='\0'; ++c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 			}
 			else if (strcmp(stringRecv,"PTIME?") == 0){
 				//float to string
@@ -434,27 +549,74 @@ main(void)
 				lvalue = (long)tptime;
 				tptime -= lvalue;
 				usnprintf(buffer, 15, "%d.%06d", lvalue, (long)(tptime * 1000000));
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				for(c=0; buffer[c]!='\0'; ++c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 			}
 			else if (strcmp(stringRecv,"SWITCH?") == 0){
 				//int to string
 				usnprintf(buffer, 7, "%d", swt);
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				for(c=0; buffer[c]!='\0'; ++c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 			}
 			else if (strcmp(stringRecv,"RELAY?") == 0){
 				//int to string
 				usnprintf(buffer, 7, "%d", relay);
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				for(c=0; buffer[c]!='\0'; ++c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) buffer, c);
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "\n", 1);
 			}
 			else{
-				UARTsendString("ERROR: Cannot parse this command\n");
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
 			}
 		}
 		else{
-			UARTsendString("ERROR: Cannot parse this command\n");
+			token = strtok(stringRecv, " \n\r");
+			if (strcmp(stringRecv,"UPDATE") == 0){
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "About to perform firmware update...\n", 36);
+				// Delaying before entering DFU mode.  You can trigger it with a button
+				// press.			
+				SysCtlDelay(200000000);
+
+				// Terminate the USB device and detach from the bus.
+				USBDCDTerm(0);
+
+				// Disable all interrupts.
+				ROM_IntMasterDisable();
+
+				// Disable SysTick and its interrupt.
+				ROM_SysTickIntDisable();
+				ROM_SysTickDisable();
+
+				// Disable all processor interrupts.  Instead of disabling them one at a
+				// time, a direct write to NVIC is done to disable all peripheral
+				// interrupts.
+				HWREG(NVIC_DIS0) = 0xffffffff;
+				HWREG(NVIC_DIS1) = 0xffffffff;
+
+				// Enable and reset the USB peripheral.
+				ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_USB0);
+				ROM_SysCtlPeripheralReset(SYSCTL_PERIPH_USB0);
+				ROM_SysCtlUSBPLLEnable();
+
+				// Wait for about a second.
+				ROM_SysCtlDelay(80000000 / 3);
+
+				// Re-enable interrupts at the NVIC level.
+				ROM_IntMasterEnable();
+
+				// Call the USB boot loader.
+				ROM_UpdateUSB(0);
+
+				// Should never get here, but just in case.
+				while(1)
+				{
+				}
+			}
+			else {
+				USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) "ERROR: Cannot parse this command\n", 33);
+			}
 		}
 
 		i=0;

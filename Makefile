@@ -43,6 +43,12 @@
 
 # all the files will be generated with this name (main.elf, main.bin, main.hex, etc)
 PROJ_NAME=main
+SOURCE_NAME=main
+ifdef CHIP
+	ifeq ($(CHIP), usb)
+		SOURCE_NAME=main_usb
+	endif
+endif
 
 #Part Declaration
 PART=TM4C123GH6PM
@@ -65,7 +71,7 @@ IPATH=$(TIVAWARE_LIB)/
 
 all: gcc/$(PROJ_NAME).axf
 
-gcc/$(PROJ_NAME).axf: gcc/$(PROJ_NAME).o
+gcc/$(PROJ_NAME).axf: gcc/$(SOURCE_NAME).o
 gcc/$(PROJ_NAME).axf: gcc/startup_gcc.o
 gcc/$(PROJ_NAME).axf: gcc/ustdlib.o
 gcc/$(PROJ_NAME).axf: gcc/usb_serial_structs.o
