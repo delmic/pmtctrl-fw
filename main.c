@@ -66,9 +66,18 @@
 #include "driverlib/timer.h"
 #include "driverlib/rom.h"
 #include "utils/ustdlib.h"
+#ifdef UART
 #include "driverlib/uart.h"
 #include "utils/uartstdio.h"
-
+#else
+#include "driverlib/usb.h"
+#include "usblib/usblib.h"
+#include "usblib/usbcdc.h"
+#include "usblib/usb-ids.h"
+#include "usblib/device/usbdevice.h"
+#include "usblib/device/usbdcdc.h"
+#include "usb_serial_structs.h"
+#endif
 
 //Min and Max voltage values in V
 #define MAX_VOLT 1.11
@@ -135,11 +144,119 @@ float GetElapsedTime(){
 	return cur_time;
 }
 
+#ifdef UART
 void UARTsendString(char *pt){
 	while(*pt!='\0'){
 		UARTCharPut(UART0_BASE, *pt);
 		pt++;
 	}
+}
+#else
+// Flags used to pass commands from interrupt context to the main loop.
+#define COMMAND_PACKET_RECEIVED 0x00000001
+#define COMMAND_STATUS_UPDATE   0x00000002
+
+volatile uint32_t g_ui32Flags = 0;
+char *g_pcStatus;
+
+// Global flag indicating that a USB configuration has been set.
+static volatile bool g_bUSBConfigured = false;
+
+void
+__error__(char *pcFilename, uint32_t ui32Line)
+{
+	while(1)
+	{
+	}
+}
+
+uint32_t
+ControlHandler(void *pvCBData, uint32_t ui32Event,
+		uint32_t ui32MsgValue, void *pvMsgData)
+{
+	uint32_t ui32IntsOff;
+
+	switch(ui32Event)
+	{
+
+		// We are connected to a host and communication is now possible.
+		case USB_EVENT_CONNECTED:
+			g_bUSBConfigured = true;
+
+			// Flush our buffers.
+			USBBufferFlush(&g_sTxBuffer);
+			USBBufferFlush(&g_sRxBuffer);
+
+			// Tell the main loop to update the display.
+			ui32IntsOff = ROM_IntMasterDisable();
+			g_pcStatus = "Connected";
+			g_ui32Flags |= COMMAND_STATUS_UPDATE;
+			if(!ui32IntsOff)
+			{
+				ROM_IntMasterEnable();
+			}
+			break;
+
+		// The host has disconnected.
+		case USB_EVENT_DISCONNECTED:
+			g_bUSBConfigured = false;
+			ui32IntsOff = ROM_IntMasterDisable();
+			g_pcStatus = "Disconnected";
+			g_ui32Flags |= COMMAND_STATUS_UPDATE;
+			if(!ui32IntsOff)
+			{
+				ROM_IntMasterEnable();
+			}
+			break;
+
+		// Ignore SUSPEND and RESUME for now.
+		case USB_EVENT_SUSPEND:
+		case USB_EVENT_RESUME:
+			break;
+
+		// We don't expect to receive any other events.  Ignore any that show
+		// up in a release build or hang in a debug build.
+		default:
+			break;
+	}
+
+	return(0);
+}
+
+//Callbacks are kept for later use
+uint32_t
+TxHandler(void *pvCBData, uint32_t ui32Event, uint32_t ui32MsgValue,
+	void *pvMsgData)
+{
+	switch(ui32Event)
+	{
+		case USB_EVENT_TX_COMPLETE:
+			// Since we are using the USBBuffer, we don't need to do anything
+			// here.
+			break;
+		default:
+			break;
+	}
+	return(0);
+}
+
+uint32_t
+RxHandler(void *pvCBData, uint32_t ui32Event, uint32_t ui32MsgValue,
+	void *pvMsgData)
+{
+	return(0);
+}
+#endif
+
+// Write method
+void SendString(char *pt){
+#ifdef UART
+UARTsendString(pt);
+#else
+int c=0;
+for(c=0; pt[c]!='\0'; ++c);
+USBBufferWrite((tUSBBuffer *)&g_sTxBuffer, (uint8_t *) pt, c);
+#endif
 }
 
 int
@@ -147,6 +264,10 @@ main(void)
 {
 	char stringRecv[32]; //32 bytes will be reserved for this array
 	char buffer[32]; //32 bytes will be reserved for this array
+#ifndef UART
+	uint32_t ui32Read;
+	uint8_t ui8Char;
+#endif
 	char* token;
 	float value;
 	char cThisChar = ' ';
@@ -179,16 +300,6 @@ main(void)
 	SysCtlClockSet(SYSCTL_SYSDIV_2_5 | SYSCTL_USE_PLL | SYSCTL_XTAL_16MHZ | SYSCTL_OSC_MAIN);
 	//SysCtlClockSet(SYSCTL_SYSDIV_4 | SYSCTL_USE_PLL | SYSCTL_XTAL_16MHZ |	SYSCTL_OSC_MAIN); //50 MHz
 
-	// Configure UART
-	SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
-	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
-	GPIOPinConfigure(GPIO_PA0_U0RX);
-	GPIOPinConfigure(GPIO_PA1_U0TX);
-	GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
-	UARTConfigSetExpClk(UART0_BASE, 80000000, 9600,
-				(UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | 
-				UART_CONFIG_PAR_NONE));
-
 	// Only for debugging purposes, using the development board
 	// Enable the GPIO port that is used for the on-board LED.
 	//ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
@@ -202,21 +313,53 @@ main(void)
 	SysTickPeriodSet(SysCtlClockGet() / SYSTICKS_PER_SECOND);
 	SysTickIntEnable();
 	SysTickEnable();
+	
+#ifdef UART
+	// Configure UART
+	SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+	GPIOPinConfigure(GPIO_PA0_U0RX);
+	GPIOPinConfigure(GPIO_PA1_U0TX);
+	GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+	UARTConfigSetExpClk(UART0_BASE, 80000000, 9600,
+				(UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | 
+				UART_CONFIG_PAR_NONE));
+#else
+	// Configure the required pins for USB operation.
+	ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
+	ROM_GPIOPinTypeUSBAnalog(GPIO_PORTD_BASE, GPIO_PIN_5 | GPIO_PIN_4);
+	// Not configured initially.
+	g_bUSBConfigured = false;
+	// Initialize the transmit and receive buffers.
+	USBBufferInit(&g_sTxBuffer);
+	USBBufferInit(&g_sRxBuffer);
+
+	// Set the USB stack mode to Device mode with VBUS monitoring.
+	USBStackModeSet(0, eUSBModeForceDevice, 0);
+
+	// Pass our device information to the USB library and place the device
+	// on the bus.
+	USBDCDCInit(0, &g_sCDCDevice);
+#endif
 
 	// Configure GPIO
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOE);
 	// pin 0 - SWITCH, pin 1 - PWR, pin 2 - RELAY
 	GPIOPinTypeGPIOOutput(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2);
-
+#ifdef COMPARATOR
+	// pin 4 - Separate comparator signal
+	GPIOPinTypeGPIOInput(GPIO_PORTE_BASE, GPIO_PIN_4);
+#else
 	// Configure Analog Comparator
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOC);
-	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_COMP0);
 	// pin 6 - Comparator reference, pin 7 - Comparator input
 	GPIOPinTypeComparator(GPIO_PORTC_BASE,GPIO_PIN_6|GPIO_PIN_7);
 	GPIOPinConfigure(GPIO_PF0_C0O);
 	ComparatorConfigure(COMP_BASE,0,
 	COMP_TRIG_NONE|COMP_INT_RISE|COMP_ASRCP_PIN0|COMP_OUTPUT_NORMAL);
+#endif
 
 	// Configure SPI
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_SSI0);
@@ -242,7 +385,27 @@ main(void)
 
 	// Set initialization values to output pins
 	// Set relay, pwr and swt pin values
-	gpout = (relay<<2) | (pwr<<1) | swt;	
+#ifdef SOFTSWITCH
+	if (swt == 0){
+        dac_data = (0 / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
+        //Prepare command for DAC
+        pui32DataTx = (dac_data<<4) | DAC_B;
+        SPIsendInt(pui32DataTx);
+        pui32DataTx = 0x006F0000;
+        SPIsendInt(pui32DataTx);
+    }
+    else {
+        dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
+        //Prepare command for DAC
+        pui32DataTx = (dac_data<<4) | DAC_B;
+        SPIsendInt(pui32DataTx);
+        pui32DataTx = 0x006F0000;
+        SPIsendInt(pui32DataTx);
+    }
+	gpout = (relay<<2) | (swt<<1) | pwr;
+	GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, gpout);
+#else
+	gpout = (relay<<2) | (pwr<<1) | swt;
 	GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, gpout);
 	// Set voltage
 	dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
@@ -250,8 +413,13 @@ main(void)
 	SPIsendInt(pui32DataTx);
 	pui32DataTx = 0x006F0000;
 	SPIsendInt(pui32DataTx);
+#endif
 	// Set protection current
+#ifdef COMPARATOR
+	dac_data = (pcurr / (MAX_PCURR - MIN_PCURR)) * DAC_RANGE;
+#else
 	dac_data = (0.75*pcurr / (MAX_PCURR - MIN_PCURR)) * DAC_RANGE;
+#endif
 	pui32DataTx = (dac_data<<4) | DAC_A;
 	SPIsendInt(pui32DataTx);
 	pui32DataTx = 0x006F0000;
@@ -262,12 +430,28 @@ main(void)
 	//
 	while(1)
 	{
-
+#ifndef UART
+		if(g_ui32Flags & COMMAND_STATUS_UPDATE)
+		{
+			// Clear the command flag
+			ROM_IntMasterDisable();
+			g_ui32Flags &= ~COMMAND_STATUS_UPDATE;
+			ROM_IntMasterEnable();
+		}
+#endif
 		do
 		{
 			// In the meantime, check for protection trip
+#ifdef COMPARATOR
+			trip_bit = GPIOPinRead(GPIO_PORTE_BASE, GPIO_PIN_4);
+#else
 			trip_bit = ComparatorValueGet(COMP_BASE,0);
+#endif
+#ifdef COMPARATOR
+			if (trip_bit == 1){
+#else
 			if (trip_bit == 0){
+#endif
 				if (begin == 0){
 					begin = GetElapsedTime();
 				}
@@ -277,20 +461,36 @@ main(void)
 					if (time_spent > ptime){
 						//Force protection to active
 						swt = 0;
+#ifdef SOFTSWITCH
+					    dac_data = (0 / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
+					    //Prepare command for DAC
+					    pui32DataTx = (dac_data<<4) | DAC_B;
+					    SPIsendInt(pui32DataTx);
+					    pui32DataTx = 0x006F0000;
+					    SPIsendInt(pui32DataTx);
+#else
 						// Set pwr and swt pin values
 						gpout = (pwr<<1) | swt;
 						GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
+#endif
 					}
 				}
 			}
 			else{
 				begin = 0;
 			}
-
+#ifdef UART
 			//Read from UART
 			if(UARTCharsAvail(UART0_BASE))
 			{
 				cThisChar = UARTCharGetNonBlocking(UART0_BASE);
+#else
+			//Read from USB
+			ui32Read = USBBufferRead((tUSBBuffer *)&g_sRxBuffer, &ui8Char, 1);
+			if(ui32Read)
+			{
+				cThisChar = (char)ui8Char;
+#endif
 				stringRecv[i] = cThisChar;
 				i++;   
 			}
@@ -315,7 +515,7 @@ main(void)
 		//Protocol implementation for PMT ctrl unit command processing
 		//
 		if (((wspaces > 0) && (qmarks > 0)) || (wspaces > 1) || (qmarks > 1)){
-			UARTsendString("ERROR: Cannot parse this command\n");
+			SendString("ERROR: Cannot parse this command\n");
 		}
 		else if (wspaces){
 			// split data to get the value in case of setter
@@ -324,91 +524,128 @@ main(void)
 			value = ustrtof(token, NULL);
 			if (strcmp(stringRecv,"PWR") == 0){
 				if ((value != 0) && (value != 1))
-					UARTsendString("ERROR: Out of range set value\n");
+					SendString("ERROR: Out of range set value\n");
 				else{
 					pwr = value;
-					UARTCharPut(UART0_BASE, '\n');
+					SendString("\n");
 					// Set pwr and swt pin values
-					gpout = (pwr<<1) | swt;	
+#ifdef SOFTSWITCH
+					gpout = (swt<<1) | pwr;
+#else
+					gpout = (pwr<<1) | swt;
+#endif
 					GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
 				}
 			}
 			else if (strcmp(stringRecv,"SWITCH") == 0){
 				if ((value != 0) && (value != 1))
-					UARTsendString("ERROR: Out of range set value\n");
+					SendString("ERROR: Out of range set value\n");
 				else{
 					swt = value;
-					UARTCharPut(UART0_BASE, '\n');
+					SendString("\n");
 					// Set pwr and swt pin values
+#ifdef SOFTSWITCH
+					if (swt == 0){
+				        dac_data = (0 / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
+				    }
+				    else {
+				        dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
+				    }
+			        //Prepare command for DAC
+			        pui32DataTx = (dac_data<<4) | DAC_B;
+			        SPIsendInt(pui32DataTx);
+			        pui32DataTx = 0x006F0000;
+			        SPIsendInt(pui32DataTx);
+#else
 					gpout = (pwr<<1) | swt;	
 					GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1, gpout);
+#endif
 				}
 			}
 			else if (strcmp(stringRecv,"RELAY") == 0){
 				if ((value != 0) && (value != 1))
-					UARTsendString("ERROR: Out of range set value\n");
+					SendString("ERROR: Out of range set value\n");
 				else{
 					relay = value;
-					UARTCharPut(UART0_BASE, '\n');
-					gpout = (relay<<2) | (pwr<<1) | swt;	
+					SendString("\n");
+#ifdef SOFTSWITCH
+					gpout = (relay<<2) | (swt<<1) | pwr;
+#else
+                    gpout = (relay<<2) | (pwr<<1) | swt;
+#endif
 					GPIOPinWrite(GPIO_PORTE_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2, gpout);
 				}
 			}
 			else if (strcmp(stringRecv,"VOLT") == 0){
 				if ((value < MIN_VOLT) || (value > MAX_VOLT))
-					UARTsendString("ERROR: Out of range set value\n");
+					SendString("ERROR: Out of range set value\n");
 				else{
 					volt = value;
-					dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
-					//Prepare command for DAC
-					pui32DataTx = (dac_data<<4) | DAC_B;
-					SPIsendInt(pui32DataTx);
-					pui32DataTx = 0x006F0000;
-					SPIsendInt(pui32DataTx);
-					UARTCharPut(UART0_BASE, '\n');
+#ifdef SOFTSWITCH
+					if (swt == 1){
+					    dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
+					    //Prepare command for DAC
+					    pui32DataTx = (dac_data<<4) | DAC_B;
+					    SPIsendInt(pui32DataTx);
+					    pui32DataTx = 0x006F0000;
+					    SPIsendInt(pui32DataTx);
+					}
+#else
+				    dac_data = (volt / (MAX_VOLT - MIN_VOLT)) * DAC_RANGE;
+				    //Prepare command for DAC
+				    pui32DataTx = (dac_data<<4) | DAC_B;
+				    SPIsendInt(pui32DataTx);
+				    pui32DataTx = 0x006F0000;
+				    SPIsendInt(pui32DataTx);
+#endif
+					SendString("\n");
 				}
 			}
 			else if (strcmp(stringRecv,"PCURR") == 0){
 				if ((value < MIN_PCURR) || (value > MAX_PCURR))
-					UARTsendString("ERROR: Out of range set value\n");
+					SendString("ERROR: Out of range set value\n");
 				else{
 					pcurr = value;
+#ifdef COMPARATOR
+					dac_data = (pcurr / (MAX_PCURR - MIN_PCURR)) * DAC_RANGE;
+#else
 					//We assume there is a divisor to half in the PMT output voltage,
 					//the max of comparison voltage is 4.095 V, the PMT has a multiplication
 					//of 60000, so 100microAmps should be compared to 100e-6*60000/2=3V therefore
 					//we need a correction factor of 3/4.095=~0.75
-					dac_data = (0.75*pcurr / (MAX_PCURR - MIN_PCURR)) * DAC_RANGE;
+                    dac_data = (0.75*pcurr / (MAX_PCURR - MIN_PCURR)) * DAC_RANGE;
+#endif
 					//Prepare command for DAC
 					pui32DataTx = (dac_data<<4) | DAC_A;
 					SPIsendInt(pui32DataTx);
 					pui32DataTx = 0x006F0000;
 					SPIsendInt(pui32DataTx);
-					UARTCharPut(UART0_BASE, '\n');
+					SendString("\n");
 				}
 			}
 			else if (strcmp(stringRecv,"PTIME") == 0){
 				if ((value < MIN_PTIME) || (value > MAX_PTIME))
-					UARTsendString("ERROR: Out of range set value\n");
+					SendString("ERROR: Out of range set value\n");
 				else{
 					ptime = value;
-					UARTCharPut(UART0_BASE, '\n');
+					SendString("\n");
 				}
 			}
 			else{
-				UARTsendString("ERROR: Cannot parse this command\n");
+				SendString("ERROR: Cannot parse this command\n");
 			}
 		}
 		else if (qmarks){
 			token = strtok(stringRecv, " \n\r");
 			if (strcmp(stringRecv,"*IDN?") == 0){
-				UARTsendString(idn);
-				UARTCharPut(UART0_BASE, '\n');
+				SendString(idn);
+				SendString("\n");
 			}
 			else if (strcmp(stringRecv,"PWR?") == 0){
 				//int to string
 				usnprintf(buffer, 7, "%d", pwr);
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				SendString(buffer);
+				SendString("\n");
 			}
 			else if (strcmp(stringRecv,"VOLT?") == 0){
 				//float to string
@@ -416,8 +653,8 @@ main(void)
 				lvalue = (long)tvolt;
 				tvolt -= lvalue;
 				usnprintf(buffer, 15, "%d.%06d", lvalue, (long)(tvolt * 1000000));
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				SendString(buffer);
+				SendString("\n");
 			}
 			else if (strcmp(stringRecv,"PCURR?") == 0){
 				//float to string
@@ -425,8 +662,8 @@ main(void)
 				lvalue = (long)tpcurr;
 				tpcurr -= lvalue;
 				usnprintf(buffer, 15, "%d.%06d", lvalue, (long)(tpcurr * 1000000));
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				SendString(buffer);
+				SendString("\n");
 			}
 			else if (strcmp(stringRecv,"PTIME?") == 0){
 				//float to string
@@ -434,27 +671,27 @@ main(void)
 				lvalue = (long)tptime;
 				tptime -= lvalue;
 				usnprintf(buffer, 15, "%d.%06d", lvalue, (long)(tptime * 1000000));
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				SendString(buffer);
+				SendString("\n");
 			}
 			else if (strcmp(stringRecv,"SWITCH?") == 0){
 				//int to string
 				usnprintf(buffer, 7, "%d", swt);
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				SendString(buffer);
+				SendString("\n");
 			}
 			else if (strcmp(stringRecv,"RELAY?") == 0){
 				//int to string
 				usnprintf(buffer, 7, "%d", relay);
-				UARTsendString(buffer);
-				UARTCharPut(UART0_BASE, '\n');
+				SendString(buffer);
+				SendString("\n");
 			}
 			else{
-				UARTsendString("ERROR: Cannot parse this command\n");
+				SendString("ERROR: Cannot parse this command\n");
 			}
 		}
 		else{
-			UARTsendString("ERROR: Cannot parse this command\n");
+			SendString("ERROR: Cannot parse this command\n");
 		}
 
 		i=0;

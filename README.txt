@@ -50,9 +50,8 @@ is tested on SW-TM4C-2.1.0.12573.exe.
 directory, in our case we also place it in the development directory.
 	
 	cd ~/development/pmtctrl-fw
-	make
-	// In case we use the USB chip
-	// make CHIP=usb
+	// Name is usually the name of the city where the system is installed
+	make DESIGN=name
 
 10. Run this to flash over USB. Remember to run with sudo.
 

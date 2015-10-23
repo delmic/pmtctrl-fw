@@ -44,11 +44,6 @@
 # all the files will be generated with this name (main.elf, main.bin, main.hex, etc)
 PROJ_NAME=main
 SOURCE_NAME=main
-ifdef CHIP
-	ifeq ($(CHIP), usb)
-		SOURCE_NAME=main_usb
-	endif
-endif
 
 #Part Declaration
 PART=TM4C123GH6PM
@@ -83,6 +78,10 @@ gcc/$(PROJ_NAME).axf: gcc/$(PROJ_NAME).ld
 SCATTERgcc_$(PROJ_NAME)=gcc/$(PROJ_NAME).ld
 ENTRY_$(PROJ_NAME)=ResetISR
 CFLAGSgcc=-DTARGET_IS_TM4C123_RB1
+# For now, keep monash as default
+ifeq ($(DESIGN), oslo)
+	CFLAGSgcc=-DTARGET_IS_TM4C123_RB1 -DCOMPARATOR -DSOFTSWITCH -DUART
+endif
 
 ifneq (${MAKECMDGOALS},clean)
 -include ${wildcard gcc/*.d} __dummy__
