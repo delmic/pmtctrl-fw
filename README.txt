@@ -53,7 +53,17 @@ directory, in our case we also place it in the development directory.
 	// Name is usually the name of the city where the system is installed
 	make DESIGN=name
 
-10. Run this to flash over USB. Remember to run with sudo.
+10. If the board is connected using the ICDI (In Circuit Debug Interface) jump to step 11. Otherwise, you
+need to flash your board using a tiva board connected via JTAG to your board. You can follow the instructions
+for the "Debug Out" mode here http://austinblackstoneengineering.com/jtag-and-the-stellaris-launchpad/. Briefly
+you need to perform the steps below:
+    - Remove Power Jumper from the tiva board
+    - Connect wires from the JTAG pins (TCK, TMS, TDO, TDI, EXT DBG, TXD, RXD, RESET) below the top of the tiva
+      board to the target board.
+    - Wire together a common ground wire between the tiva board and the target board.
+    - Connect your PC to the tiva board via USB (using the ICDI) and perform step 11.
+
+11. Run this to flash over USB. Remember to run with sudo.
 
 	cd ~/development/lm4tools/lm4flash/
 	sudo ./lm4flash ~/development/pmtctrl-fw/gcc/main.bin
