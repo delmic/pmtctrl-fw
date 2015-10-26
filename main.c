@@ -83,8 +83,13 @@
 #define MAX_VOLT 1.11
 #define MIN_VOLT 0
 //Min and Max current values in microamperes
+#ifdef COMPARATOR
+#define MAX_PCURR 40
+#define MIN_PCURR 0
+#else
 #define MAX_PCURR 100
 #define MIN_PCURR 0
+#endif
 //Min and Max time values in s
 #define MAX_PTIME 100
 #define MIN_PTIME 0.000001
@@ -284,7 +289,7 @@ main(void)
 	int swt = 0;
 	int relay = 1;
 	float volt = 0, tvolt;
-	float pcurr = 50, tpcurr;
+	float pcurr = 40, tpcurr;
 	float ptime = 0.001, tptime;
 	//SPI buffers
 	uint32_t pui32DataTx, pui32DataRx, dac_data;
@@ -444,6 +449,8 @@ main(void)
 			// In the meantime, check for protection trip
 #ifdef COMPARATOR
 			trip_bit = GPIOPinRead(GPIO_PORTE_BASE, GPIO_PIN_4);
+			//float to string
+			trip_bit = (trip_bit & 0x10)>>4;;
 #else
 			trip_bit = ComparatorValueGet(COMP_BASE,0);
 #endif
