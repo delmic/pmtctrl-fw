@@ -286,6 +286,8 @@ main(void)
 	//Values for initialization
 	char idn[128] = IDN;
     strcat(idn, "_");
+    strcat(idn, DESIGN);
+    strcat(idn, "_");
     strcat(idn, VERSION);
 	int pwr = 0;
 	int swt = 0;
