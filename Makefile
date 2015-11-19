@@ -65,7 +65,7 @@ VPATH=$(TIVAWARE_LIB)/utils
 IPATH=$(TIVAWARE_LIB)/
 
 all: gcc/$(PROJ_NAME).axf
-
+VERSION=$(shell git describe --tags --dirty --always)
 gcc/$(PROJ_NAME).axf: gcc/$(SOURCE_NAME).o
 gcc/$(PROJ_NAME).axf: gcc/startup_gcc.o
 gcc/$(PROJ_NAME).axf: gcc/ustdlib.o
@@ -77,10 +77,10 @@ gcc/$(PROJ_NAME).axf: gcc/$(PROJ_NAME).ld
 
 SCATTERgcc_$(PROJ_NAME)=gcc/$(PROJ_NAME).ld
 ENTRY_$(PROJ_NAME)=ResetISR
-CFLAGSgcc=-DTARGET_IS_TM4C123_RB1
+CFLAGSgcc=-DTARGET_IS_TM4C123_RB1 -DVERSION="\"$(VERSION)\""
 # For now, keep monash as default
 ifeq ($(DESIGN), oslo)
-	CFLAGSgcc=-DTARGET_IS_TM4C123_RB1 -DCOMPARATOR -DSOFTSWITCH -DUART
+	CFLAGSgcc=-DTARGET_IS_TM4C123_RB1 -DVERSION="\"$(VERSION)\"" -DCOMPARATOR -DSOFTSWITCH -DUART
 endif
 
 ifneq (${MAKECMDGOALS},clean)

@@ -94,7 +94,7 @@
 #define MAX_PTIME 100
 #define MIN_PTIME 0.000001
 //Device identification
-#define IDN "Delmic Analog PMT version 1.0"
+#define IDN "Delmic Analog PMT"
 //12bit DAC range, 2^12 
 #define DAC_RANGE 4095
 //Mask for DAC A command
@@ -284,7 +284,9 @@ main(void)
 	double time_spent;
 	double begin = 0, end;
 	//Values for initialization
-	char* idn = IDN;
+	char idn[128] = IDN;
+    strcat(idn, "_");
+    strcat(idn, VERSION);
 	int pwr = 0;
 	int swt = 0;
 	int relay = 1;
