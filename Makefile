@@ -41,10 +41,6 @@
 #
 #******************************************************************************
 
-# all the files will be generated with this name (main.elf, main.bin, main.hex, etc)
-PROJ_NAME=main
-SOURCE_NAME=main
-
 #Part Declaration
 PART=TM4C123GH6PM
 
@@ -56,33 +52,57 @@ TIVAWARE_LIB = $(rootdir)/../tivaware
 
 #Create symbolic links to startup and linker
 HACK:=$(shell mkdir -p gcc)
-HACK:=$(shell ln -sf $(rootdir)/main.ld gcc/$(PROJ_NAME).ld)
+
+#HACK:=$(shell ln -sf $(rootdir)/main.ld gcc/oslo.ld)
+#HACK:=$(shell ln -sf $(rootdir)/main.ld gcc/monash.ld)
 HACK:=$(shell ln -sf $(rootdir)/startup_gcc.c gcc/.)
 
+VERSION=$(shell git describe --tags --dirty --always)
+
+all: gcc/oslo.axf gcc/monash.axf
+
+gcc/oslo.ld: $(rootdir)/main.ld
+	ln -sf $(rootdir)/main.ld ${@}
+
+gcc/monash.ld: $(rootdir)/main.ld
+	ln -sf $(rootdir)/main.ld ${@}
+
+gcc/oslo.o: main.c
+	@if [ 'x${VERBOSE}' = x ];                            \
+	 then                                                 \
+	     echo "  CC    ${<}";                             \
+	 else                                                 \
+	     echo ${CC} ${CFLAGS} -DDESIGN=\"oslo\" -DCOMPARATOR -DSOFTSWITCH -DUART -D${COMPILER} -o ${@} ${<}; \
+	 fi
+	@${CC} ${CFLAGS} -DDESIGN=\"oslo\" -DCOMPARATOR -DSOFTSWITCH -DUART -D${COMPILER} -o ${@} ${<}
+
+gcc/monash.o: main.c
+	@if [ 'x${VERBOSE}' = x ];                            \
+	 then                                                 \
+	     echo "  CC    ${<}";                             \
+	 else                                                 \
+	     echo ${CC} ${CFLAGS} -DDESIGN=\"monash\" -D${COMPILER} -o ${@} ${<}; \
+	 fi
+	@${CC} ${CFLAGS} -DDESIGN=\"monash\" -D${COMPILER} -o ${@} ${<}
+
 include $(TIVAWARE_LIB)/makedefs
+
+# The generic .axf rule just 
+gcc/oslo.axf: gcc/oslo.o gcc/startup_gcc.o gcc/ustdlib.o gcc/uartstdio.o $(TIVAWARE_LIB)/usblib/gcc/libusb.a $(TIVAWARE_LIB)/driverlib/gcc/libdriver.a gcc/oslo.ld
+
+SCATTERgcc_oslo=gcc/oslo.ld
+ENTRY_oslo=ResetISR
+
+gcc/monash.axf: gcc/monash.o gcc/startup_gcc.o gcc/ustdlib.o gcc/usb_serial_structs.o $(TIVAWARE_LIB)/usblib/gcc/libusb.a $(TIVAWARE_LIB)/driverlib/gcc/libdriver.a gcc/monash.ld
+
+SCATTERgcc_monash=gcc/monash.ld
+ENTRY_monash=ResetISR
 
 VPATH=$(TIVAWARE_LIB)/utils
 IPATH=$(TIVAWARE_LIB)/
 
-all: gcc/$(PROJ_NAME).axf
-VERSION=$(shell git describe --tags --dirty --always)
-gcc/$(PROJ_NAME).axf: gcc/$(SOURCE_NAME).o
-gcc/$(PROJ_NAME).axf: gcc/startup_gcc.o
-gcc/$(PROJ_NAME).axf: gcc/ustdlib.o
-gcc/$(PROJ_NAME).axf: gcc/usb_serial_structs.o
-gcc/$(PROJ_NAME).axf: gcc/uartstdio.o
-gcc/$(PROJ_NAME).axf: $(TIVAWARE_LIB)/usblib/gcc/libusb.a
-gcc/$(PROJ_NAME).axf: $(TIVAWARE_LIB)/driverlib/gcc/libdriver.a
-gcc/$(PROJ_NAME).axf: gcc/$(PROJ_NAME).ld
+CFLAGSgcc=-DTARGET_IS_TM4C123_RB1 -std=c99 -U__STRICT_ANSI__ -DVERSION="\"$(VERSION)\""
 
-SCATTERgcc_$(PROJ_NAME)=gcc/$(PROJ_NAME).ld
-ENTRY_$(PROJ_NAME)=ResetISR
-# For now, keep monash as default
-ifeq ($(DESIGN), monash)
-	CFLAGSgcc=-DTARGET_IS_TM4C123_RB1 -DVERSION="\"$(VERSION)\"" -DDESIGN="\"$(DESIGN)\""
-else
-    CFLAGSgcc=-DTARGET_IS_TM4C123_RB1 -DVERSION="\"$(VERSION)\"" -DDESIGN="\"$(DESIGN)\"" -DCOMPARATOR -DSOFTSWITCH -DUART
-endif
 
 ifneq (${MAKECMDGOALS},clean)
 -include ${wildcard gcc/*.d} __dummy__
