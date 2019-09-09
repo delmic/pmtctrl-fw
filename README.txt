@@ -12,6 +12,9 @@ In order to compile this firmware and flash the target board you need to perform
 	    libncurses5-dev libmpc-dev autoconf texinfo build-essential \
 	    libftdi-dev python-yaml zlib1g-dev libtool
 	sudo apt-get install libusb-1.0-0 libusb-1.0-0-dev
+       
+3. On Ubuntu 16.04, you can do (and skip to step 5):
+	sudo apt-get install gcc-arm-none-eabi
 
 3. Go to the GNU Tools for ARM Embedded Processors page and download the most recent tarball for Linux. 
 Then extract it (including the top-level “gcc-arm-none-eabi-…” folder) into ~/development.
